@@ -1128,6 +1128,118 @@ def flintrock_is_in_development_mode() -> bool:
     else:
         return False
 
+@cli.command()
+@click.argument('cluster-name')
+@click.option('--install-hdfs/--no-install-hdfs', default=False)
+@click.option('--hdfs-version', default='2.8.5')
+@click.option('--hdfs-download-source',
+              help="URL to download Hadoop from.",
+              default='https://www.apache.org/dyn/closer.lua?action=download&filename=hadoop/common/hadoop-{v}/hadoop-{v}.tar.gz',
+              show_default=True,
+              callback=build_hdfs_download_url)
+@click.option('--install-spark/--no-install-spark', default=True)
+@click.option('--spark-executor-instances', default=1,
+              help="How many executor instances per worker.")
+@click.option('--spark-version',
+              # Don't set a default here because it will conflict with
+              # the config file if the git commit is set.
+              # See: https://github.com/nchammas/flintrock/issues/190
+              # default=,
+              help="Spark release version to install.")
+@click.option('--spark-download-source',
+              help="URL to download a release of Spark from.",
+              default='https://www.apache.org/dyn/closer.lua?action=download&filename=spark/spark-{v}/spark-{v}-bin-hadoop2.7.tgz',
+              show_default=True,
+              callback=build_spark_download_url)
+@click.option('--spark-git-commit',
+              help="Git commit to build Spark from. "
+                   "Set to 'latest' to build Spark from the latest commit on the "
+                   "repository's default branch.")
+@click.option('--spark-git-repository',
+              help="Git repository to clone Spark from.",
+              default='https://github.com/apache/spark',
+              show_default=True)
+@click.pass_context
+def generate_manifest(
+        cli_context,
+        cluster_name,
+        install_hdfs,
+        hdfs_version,
+        hdfs_download_source,
+        install_spark,
+        spark_executor_instances,
+        spark_version,
+        spark_git_commit,
+        spark_git_repository,
+        spark_download_source
+):
+    # Generate manifest
+    services = []
+
+    option_requires(
+        option='--install-hdfs',
+        requires_all=['--hdfs-version'],
+        scope=locals())
+    option_requires(
+        option='--install-spark',
+        requires_any=[
+            '--spark-version',
+            '--spark-git-commit'],
+        scope=locals())
+    mutually_exclusive(
+        options=[
+            '--spark-version',
+            '--spark-git-commit'],
+        scope=locals())
+    option_requires(
+        option='--install-spark',
+        requires_all=[
+            '--hdfs-version'],
+        scope=locals())
+
+    check_external_dependency('ssh-keygen')
+    if install_hdfs:
+        validate_download_source(hdfs_download_source)
+        hdfs = HDFS(
+            version=hdfs_version,
+            download_source=hdfs_download_source,
+        )
+        services += [hdfs]
+    if install_spark:
+        if spark_version:
+            validate_download_source(spark_download_source)
+            spark = Spark(
+                spark_executor_instances=spark_executor_instances,
+                version=spark_version,
+                hadoop_version=hdfs_version,
+                download_source=spark_download_source,
+            )
+        elif spark_git_commit:
+            logger.warning(
+                "Warning: Building Spark takes a long time. "
+                "e.g. 15-20 minutes on an m5.xlarge instance on EC2.")
+            if spark_git_commit == 'latest':
+                spark_git_commit = get_latest_commit(spark_git_repository)
+                logger.info("Building Spark at latest commit: {c}".format(c=spark_git_commit))
+            spark = Spark(
+                spark_executor_instances=spark_executor_instances,
+                git_commit=spark_git_commit,
+                git_repository=spark_git_repository,
+                hadoop_version=hdfs_version,
+            )
+        services += [spark]
+
+    # Write out manifest
+    manifest = {
+        'services': [[type(m).__name__, m.manifest] for m in services],
+        'ssh_key_pair': ec2.generate_ssh_key_pair()._asdict()
+    }
+    ssh_key_pair = ec2.generate_ssh_key_pair()
+    fn = "flintrock-manifest-{cluster}.json".format(cluster=cluster_name)
+    print("Generating {}...".format(fn))
+    with open(fn, 'w') as fp:
+        json.dump(manifest, fp, indent=4, sort_keys=True)
+
 
 def set_open_files_limit(desired_limit):
     """

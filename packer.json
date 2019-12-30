@@ -1,0 +1,78 @@
+{
+  "variables": {
+    "cluster_name": null
+  },
+  "builders": [
+    {
+      "type": "amazon-ebs",
+      "region": "us-east-1",
+      "source_ami_filter": {
+        "filters": {
+          "virtualization-type": "hvm",
+          "name": "amzn2-ami-hvm-*",
+          "root-device-type": "ebs"
+        },
+        "owners": [
+          "amazon"
+        ],
+        "most_recent": true
+      },
+      "instance_type": "t2.micro",
+      "iam_instance_profile": "packer_instance_profile",
+      "ssh_username": "ec2-user",
+      "ami_name": "flintrock-{{user `cluster_name`}}-{{timestamp}}"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "file",
+      "source": "flintrock-manifest-{{user `cluster_name`}}.json",
+      "destination": "/tmp/flintrock-manifest.json"
+    },
+    {
+      "type": "file",
+      "source": "flintrock/scripts/setup-ephemeral-storage.py",
+      "destination": "/tmp/setup-ephemeral-storage.py"
+    },
+    {
+      "type": "shell",
+      "inline": [
+        "sudo yum update -y",
+        "sudo yum install -y jq",
+        "mv /tmp/flintrock-manifest.json ~/.flintrock-manifest.json",
+        "chmod go-rw ~/.flintrock-manifest.json",
+        "cat ~/.flintrock-manifest.json | jq -r '.ssh_key_pair.private' > ~/.ssh/id_rsa",
+        "cat ~/.flintrock-manifest.json | jq -r '.ssh_key_pair.public' >> ~/.ssh/authorized_keys",
+        "chmod 400 ~/.ssh/id_rsa",
+        "sudo yum install -y java-1.8.0-openjdk",
+        "sudo yum remove -y java-1.6.0-openjdk java-1.7.0-openjdk",
+        "sudo sh -c \"echo export JAVA_HOME=/usr/lib/jvm/jre >> /etc/environment\"",
+        "source /etc/environment"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "flintrock/scripts/download-package.py",
+      "destination": "/tmp/download-package.py"
+    },
+    {
+      "type": "shell",
+      "inline" : [
+        "python /tmp/download-package.py $(cat ~/.flintrock-manifest.json | jq -r '.services | map(select(.[0] == \"Spark\")) | .[] | .[1].download_source') \"spark\" ",
+        "for f in $(find spark/bin -type f -executable -not -name '*.cmd'); do sudo ln -s \"$(pwd)/$f\" \"/usr/local/bin/$(basename $f)\"; done",
+        "echo \"export SPARK_HOME='$(pwd)/spark'\" >> .bashrc"
+      ]
+    },
+    {
+      "type": "file",
+      "source": "flintrock/scripts/spark.service",
+      "destination": "/tmp/spark.service"
+    },
+    {
+      "type": "shell",
+      "inline" : [
+        "sudo mv /tmp/spark.service /etc/systemd/system/spark.service"
+      ]
+    }
+  ]
+}
