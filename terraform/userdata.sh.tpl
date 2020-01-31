@@ -2,6 +2,7 @@
 exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
   yum -y update
   python /tmp/setup-ephemeral-storage.py | tee /tmp/storagelayout.json
+  chown -R ec2-user:ec2-user /media
   rm -f /tmp/setup-ephemeral-storage.py
   mkdir -p /home/ec2-user/spark/conf
   cat <<'EOF' >> /home/ec2-user/spark/conf/spark-env.sh
@@ -41,8 +42,8 @@ EOF
 %{ endfor ~}
 
 %{ if master_node ~}
-sudo systemctl start spark.service
-sudo systemctl enable spark.service
+systemctl start spark.service
+systemctl enable spark.service
 %{ endif ~}
 
 
